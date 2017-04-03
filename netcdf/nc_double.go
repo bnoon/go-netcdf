@@ -33,6 +33,49 @@ func (v Var) ReadFloat64s(data []float64) error {
 	return newError(C.nc_get_var_double(C.int(v.ds), C.int(v.id), (*C.double)(unsafe.Pointer(&data[0]))))
 }
 
+func (v Var) ReadArrayFloat64s(offsets []int, lens []int, data []float64) error {
+	dims, err := v.Dims()
+	if err != nil {
+		return err
+	}
+	if len(offsets) != len(dims) || len(lens) != len(dims) {
+		return fmt.Errorf("Invalid array of offsets/lens")
+	}
+
+	starts := make([]C.size_t, len(dims))
+	counts := make([]C.size_t, len(dims))
+	total_len := 1
+	for i, d := range dims {
+		dim_len, _ := d.Len()
+		if lens[i] == -1 {
+			lens[i] = int(dim_len) - offsets[i]
+		}
+		if offsets[i]+lens[i] > int(dim_len) {
+			return fmt.Errorf("Invalid offset/len %d >= %d", i, dim_len)
+		}
+		starts[i] = C.size_t(offsets[i])
+		counts[i] = C.size_t(lens[i])
+		total_len = total_len * lens[i]
+	}
+
+	u, err := v.Type()
+	if err != nil {
+		return err
+	}
+	if u != DOUBLE {
+		return fmt.Errorf("wrong data type %s; expected %s", u, DOUBLE)
+	}
+	if len(data) != total_len {
+		return fmt.Errorf("Invalid length of recieving data %d (need %d)", len(data), total_len)
+	}
+
+	return newError(C.nc_get_vara_double(
+		C.int(v.ds), C.int(v.id),
+		(*C.size_t)(unsafe.Pointer(&starts[0])),
+		(*C.size_t)(unsafe.Pointer(&counts[0])),
+		(*C.double)(unsafe.Pointer(&data[0]))))
+}
+
 // WriteFloat64s sets the value of attribute a to val.
 func (a Attr) WriteFloat64s(val []float64) error {
 	// We don't need okData here because netcdf library doesn't know
@@ -95,5 +138,17 @@ func testReadFloat64s(v Var, n uint64) error {
 			return fmt.Errorf("data at position %d is %v; expected %v\n", i, data[i], val)
 		}
 	}
+
+	data = data[:12]
+	if err := v.ReadArrayFloat64s([]int{1, 1}, []int{-1, -1}, data); err != nil {
+		return err
+	}
+	if data[0] != float64(14) {
+		return fmt.Errorf("data as sub-array[0] != 14")
+	}
+	if data[11] != float64(30) {
+		return fmt.Errorf("data as sub-array[11] != 30")
+	}
+	// fmt.Printf("array float64 %d %s\n", len(data), data)
 	return nil
 }
